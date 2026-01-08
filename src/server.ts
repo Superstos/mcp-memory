@@ -42,12 +42,14 @@ export async function startServer(config: Config) {
         return;
       }
 
-      if (req.method === "GET" && req.url === "/health") {
+      const path = getPath(req.url);
+
+      if (req.method === "GET" && path === "/health") {
         respondJson(res, 200, { status: "ok", vectorEnabled });
         return;
       }
 
-      if (req.method === "GET" && req.url === "/") {
+      if (req.method === "GET" && path === "/") {
         respondJson(res, 200, {
           name: "emergant-memory",
           version: "0.1.0",
@@ -56,7 +58,8 @@ export async function startServer(config: Config) {
         return;
       }
 
-      if (req.method !== "POST" || req.url !== "/mcp") {
+      const isMcpPath = path === "/mcp" || path === "/";
+      if (req.method !== "POST" || !isMcpPath) {
         respondJson(res, 404, { error: "not found" });
         return;
       }
@@ -140,6 +143,12 @@ function createRateLimiter(max: number, windowMs: number): RateLimiter {
       return true;
     }
   };
+}
+
+function getPath(url?: string): string {
+  if (!url) return "/";
+  const queryIndex = url.indexOf("?");
+  return queryIndex >= 0 ? url.slice(0, queryIndex) : url;
 }
 
 async function readJson(req: IncomingMessage, maxBytes: number): Promise<any> {
