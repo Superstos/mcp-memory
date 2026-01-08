@@ -49,7 +49,7 @@ export async function startServer(config: Config) {
         return;
       }
 
-      if (req.method === "GET" && path === "/") {
+      if (req.method === "GET" && (path === "/" || path === "/mcp")) {
         respondJson(res, 200, {
           name: "emergant-memory",
           version: "0.1.0",
