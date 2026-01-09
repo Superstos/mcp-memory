@@ -26,7 +26,7 @@ export async function startServer(config: Config) {
 
   const mcp = createMcpHandler({
     store,
-    serverInfo: { name: "emergant-memory", version: "0.1.0" },
+    serverInfo: { name: "mcp-memory", version: "0.1.0" },
     vectorEnabled,
     policy: {
       requireTags: config.requireTags,
@@ -59,7 +59,7 @@ export async function startServer(config: Config) {
 
       if (req.method === "GET" && (path === "/" || path === "/mcp")) {
         respondJson(res, 200, {
-          name: "emergant-memory",
+          name: "mcp-memory",
           version: "0.1.0",
           endpoints: ["/mcp", "/health"]
         });

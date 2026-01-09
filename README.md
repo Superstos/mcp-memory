@@ -1,4 +1,4 @@
-# emergant memory MCP
+# mcp-memory
 
 Long-term memory MCP server backed by Postgres. This server stores only what agents send; compression is achieved by structured summaries, facts, decisions, and short snippets (not auto-summarized).
 
@@ -49,6 +49,7 @@ npm start
 - `context_create`: create or update a namespace/context_id bucket
 - `context_list`: list contexts
 - `context_delete`: remove context and its entries
+- `context_digest`: fetch a compact digest (latest summary + per-type entries)
 - `context_alias_set`: create or update an alias
 - `context_alias_list`: list aliases
 - `context_alias_get`: resolve alias

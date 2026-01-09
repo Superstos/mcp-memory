@@ -12,6 +12,7 @@ import {
   ValidationError
 } from "./validation.js";
 import { MEMORY_PROMPT } from "./prompt.js";
+import { EntryRecord } from "./types.js";
 
 export interface McpServerInfo {
   name: string;
@@ -51,6 +52,15 @@ type RpcResponse = {
   result?: unknown;
   error?: { code: number; message: string; data?: unknown };
 };
+
+const DEFAULT_DIGEST_TYPES = [
+  "summary",
+  "decision",
+  "question",
+  "fact",
+  "snippet",
+  "todo"
+];
 
 export function createMcpHandler(options: McpHandlerOptions) {
   const capabilities: McpCapabilities = {
@@ -100,6 +110,21 @@ export function createMcpHandler(options: McpHandlerOptions) {
           alias: { type: "string" },
           namespace: { type: "string" },
           context_id: { type: "string" }
+        }
+      }
+    },
+    {
+      name: "context_digest",
+      description: "Fetch a compact digest of key entry types.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          alias: { type: "string" },
+          namespace: { type: "string" },
+          context_id: { type: "string" },
+          types: { type: "array", items: { type: "string" } },
+          limit: { type: "number" },
+          include_raw: { type: "boolean" }
         }
       }
     },
@@ -328,6 +353,27 @@ export function createMcpHandler(options: McpHandlerOptions) {
   const latestEntryId = (entryType: string) =>
     `${options.policy.latestEntryPrefix}${entryType}`;
 
+  async function hydrateEntries(
+    entries: EntryRecord[],
+    includeRaw: boolean,
+    namespace: string,
+    contextId: string
+  ): Promise<EntryRecord[]> {
+    if (!includeRaw) return entries;
+    const hydrated = await Promise.all(
+      entries.map(async (entry) => {
+        const full = await options.store.getEntry({
+          namespace,
+          context_id: contextId,
+          entry_id: entry.id,
+          include_raw: true
+        });
+        return full ?? entry;
+      })
+    );
+    return hydrated;
+  }
+
   async function resolveContextParams(params: Record<string, unknown>) {
     const hasAlias = params.alias !== undefined && params.alias !== null;
     const hasNamespace = params.namespace !== undefined && params.namespace !== null;
@@ -440,6 +486,88 @@ export function createMcpHandler(options: McpHandlerOptions) {
           context_id: contextId
         });
         return toolResult({ deleted });
+      }
+      case "context_digest": {
+        const { namespace, contextId } = await resolveContextParams(params);
+        const types = normalizeEntryTypes(params.types);
+        const limit = normalizeLimit(params.limit, 25) ?? 5;
+        const includeRaw = Boolean(params.include_raw);
+        const warnings: string[] = [];
+
+        const resolvedTypes = types.length > 0 ? types : DEFAULT_DIGEST_TYPES;
+        const includeSummary = resolvedTypes.includes("summary");
+        const otherTypes = resolvedTypes.filter((type) => type !== "summary");
+
+        let summary: EntryRecord | null = null;
+        if (includeSummary) {
+          summary = await options.store.getEntry({
+            namespace,
+            context_id: contextId,
+            entry_id: latestEntryId("summary"),
+            include_raw: includeRaw
+          });
+
+          if (!summary) {
+            const fallback = await options.store.searchEntries({
+              namespace,
+              context_id: contextId,
+              types: ["summary"],
+              limit: 1,
+              includeExpired: false
+            });
+            if (fallback.length > 0) {
+              summary = includeRaw
+                ? (await options.store.getEntry({
+                    namespace,
+                    context_id: contextId,
+                    entry_id: fallback[0].id,
+                    include_raw: true
+                  })) ?? fallback[0]
+                : fallback[0];
+              warnings.push(
+                "latest summary not found; falling back to most recent summary"
+              );
+            }
+          }
+        }
+
+        const grouped = await Promise.all(
+          otherTypes.map(async (type) => {
+            const entries = await options.store.searchEntries({
+              namespace,
+              context_id: contextId,
+              types: [type],
+              limit,
+              includeExpired: false
+            });
+            const hydrated = await hydrateEntries(
+              entries,
+              includeRaw,
+              namespace,
+              contextId
+            );
+            return { type, entries: hydrated };
+          })
+        );
+
+        const entriesByType: Record<string, EntryRecord[]> = {};
+        for (const group of grouped) {
+          entriesByType[group.type] = group.entries;
+        }
+
+        const digest = {
+          namespace,
+          context_id: contextId,
+          summary: includeSummary ? summary : undefined,
+          entries: entriesByType,
+          meta: {
+            limit,
+            types: resolvedTypes,
+            include_raw: includeRaw
+          }
+        };
+
+        return toolResult(digest, warnings);
       }
       case "context_alias_set": {
         const alias = normalizeAlias(params.alias);
