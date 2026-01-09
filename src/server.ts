@@ -27,7 +27,15 @@ export async function startServer(config: Config) {
   const mcp = createMcpHandler({
     store,
     serverInfo: { name: "emergant-memory", version: "0.1.0" },
-    vectorEnabled
+    vectorEnabled,
+    policy: {
+      requireTags: config.requireTags,
+      autoTag: config.autoTag,
+      allowRawText: config.allowRawText,
+      forceLatestSummary: config.forceLatestSummary,
+      latestEntryPrefix: config.latestEntryPrefix,
+      maxContentChars: config.maxContentChars
+    }
   });
 
   const limiter = createRateLimiter(config.rateLimitMax, config.rateLimitWindowMs);
@@ -94,6 +102,22 @@ export async function startServer(config: Config) {
   server.listen(config.port, () => {
     logger.info("server listening", { port: config.port, vectorEnabled });
   });
+
+  if (config.cleanupIntervalMs > 0) {
+    const timer = setInterval(async () => {
+      try {
+        const deleted = await store.cleanupExpiredEntries();
+        if (deleted > 0) {
+          logger.info("expired entries cleaned", { deleted });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "cleanup failed";
+        logger.warn("cleanup failed", { message });
+      }
+    }, config.cleanupIntervalMs);
+
+    timer.unref?.();
+  }
 }
 
 function setSecurityHeaders(res: ServerResponse, allowOrigin: string) {

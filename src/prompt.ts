@@ -5,7 +5,9 @@ Rules:
 - Store compressed knowledge only: summaries, facts, decisions, open questions, and small snippets.
 - Do not dump entire documents unless explicitly needed.
 - Prefer concise, structured entries with tags and importance.
+- Tags are required; include at least project/topic tags.
 - Update or supersede entries instead of appending duplicates.
+- For summaries, update the latest summary entry instead of creating multiples.
 
 Suggested entry types:
 - summary: 3-7 bullet summary of current state.

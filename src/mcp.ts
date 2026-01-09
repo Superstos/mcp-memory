@@ -1,5 +1,6 @@
 import { MemoryStore } from "./store.js";
 import {
+  normalizeAlias,
   normalizeNamespace,
   normalizeContextId,
   normalizeRequiredString,
@@ -27,6 +28,14 @@ export interface McpHandlerOptions {
   store: MemoryStore;
   serverInfo: McpServerInfo;
   vectorEnabled: boolean;
+  policy: {
+    requireTags: boolean;
+    autoTag: boolean;
+    allowRawText: boolean;
+    forceLatestSummary: boolean;
+    latestEntryPrefix: string;
+    maxContentChars: number;
+  };
 }
 
 type RpcRequest = {
@@ -77,6 +86,7 @@ export function createMcpHandler(options: McpHandlerOptions) {
           namespace: { type: "string" },
           scope: { type: "string", enum: ["local", "shared"] },
           owner: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
           limit: { type: "number" }
         }
       }
@@ -87,10 +97,57 @@ export function createMcpHandler(options: McpHandlerOptions) {
       inputSchema: {
         type: "object",
         properties: {
+          alias: { type: "string" },
+          namespace: { type: "string" },
+          context_id: { type: "string" }
+        }
+      }
+    },
+    {
+      name: "context_alias_set",
+      description: "Create or update a context alias.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          alias: { type: "string" },
           namespace: { type: "string" },
           context_id: { type: "string" }
         },
-        required: ["namespace", "context_id"]
+        required: ["alias", "namespace", "context_id"]
+      }
+    },
+    {
+      name: "context_alias_list",
+      description: "List context aliases.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          namespace: { type: "string" },
+          context_id: { type: "string" },
+          limit: { type: "number" }
+        }
+      }
+    },
+    {
+      name: "context_alias_get",
+      description: "Resolve an alias to its namespace/context_id.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          alias: { type: "string" }
+        },
+        required: ["alias"]
+      }
+    },
+    {
+      name: "context_alias_delete",
+      description: "Delete a context alias.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          alias: { type: "string" }
+        },
+        required: ["alias"]
       }
     },
     {
@@ -99,6 +156,7 @@ export function createMcpHandler(options: McpHandlerOptions) {
       inputSchema: {
         type: "object",
         properties: {
+          alias: { type: "string" },
           namespace: { type: "string" },
           context_id: { type: "string" },
           entry: {
@@ -130,7 +188,74 @@ export function createMcpHandler(options: McpHandlerOptions) {
             required: ["entry_type", "content"]
           }
         },
-        required: ["namespace", "context_id", "entry"]
+        required: ["entry"]
+      }
+    },
+    {
+      name: "entry_latest_upsert",
+      description: "Upsert a latest entry for a given entry type.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          alias: { type: "string" },
+          namespace: { type: "string" },
+          context_id: { type: "string" },
+          entry: {
+            type: "object",
+            properties: {
+              entry_id: { type: "string" },
+              entry_type: {
+                type: "string",
+                enum: [
+                  "summary",
+                  "fact",
+                  "decision",
+                  "question",
+                  "note",
+                  "snippet",
+                  "todo"
+                ]
+              },
+              title: { type: "string" },
+              content: { type: "string" },
+              tags: { type: "array", items: { type: "string" } },
+              importance: { type: "number" },
+              created_by: { type: "string" },
+              expires_at: { type: "string" },
+              raw_text: { type: "string" },
+              embedding: { type: "array", items: { type: "number" } },
+              metadata: { type: "object" }
+            },
+            required: ["entry_type", "content"]
+          }
+        },
+        required: ["entry"]
+      }
+    },
+    {
+      name: "entry_latest_get",
+      description: "Get the latest entry for a given entry type.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          alias: { type: "string" },
+          namespace: { type: "string" },
+          context_id: { type: "string" },
+          entry_type: {
+            type: "string",
+            enum: [
+              "summary",
+              "fact",
+              "decision",
+              "question",
+              "note",
+              "snippet",
+              "todo"
+            ]
+          },
+          include_raw: { type: "boolean" }
+        },
+        required: ["entry_type"]
       }
     },
     {
@@ -139,12 +264,13 @@ export function createMcpHandler(options: McpHandlerOptions) {
       inputSchema: {
         type: "object",
         properties: {
+          alias: { type: "string" },
           namespace: { type: "string" },
           context_id: { type: "string" },
           entry_id: { type: "string" },
           include_raw: { type: "boolean" }
         },
-        required: ["namespace", "context_id", "entry_id"]
+        required: ["entry_id"]
       }
     },
     {
@@ -153,6 +279,7 @@ export function createMcpHandler(options: McpHandlerOptions) {
       inputSchema: {
         type: "object",
         properties: {
+          alias: { type: "string" },
           namespace: { type: "string" },
           context_id: { type: "string" },
           query: { type: "string" },
@@ -162,8 +289,7 @@ export function createMcpHandler(options: McpHandlerOptions) {
           include_expired: { type: "boolean" },
           search_mode: { type: "string", enum: ["fts", "vector", "hybrid"] },
           embedding: { type: "array", items: { type: "number" } }
-        },
-        required: ["namespace", "context_id"]
+        }
       }
     },
     {
@@ -172,11 +298,12 @@ export function createMcpHandler(options: McpHandlerOptions) {
       inputSchema: {
         type: "object",
         properties: {
+          alias: { type: "string" },
           namespace: { type: "string" },
           context_id: { type: "string" },
           entry_id: { type: "string" }
         },
-        required: ["namespace", "context_id", "entry_id"]
+        required: ["entry_id"]
       }
     }
   ];
@@ -197,6 +324,67 @@ export function createMcpHandler(options: McpHandlerOptions) {
       arguments: []
     }
   ];
+
+  const latestEntryId = (entryType: string) =>
+    `${options.policy.latestEntryPrefix}${entryType}`;
+
+  async function resolveContextParams(params: Record<string, unknown>) {
+    const hasAlias = params.alias !== undefined && params.alias !== null;
+    const hasNamespace = params.namespace !== undefined && params.namespace !== null;
+    const hasContextId = params.context_id !== undefined && params.context_id !== null;
+
+    if (hasAlias) {
+      if (hasNamespace || hasContextId) {
+        throw new ValidationError(
+          "provide alias or namespace/context_id, not both"
+        );
+      }
+      const alias = normalizeAlias(params.alias);
+      const resolved = await options.store.resolveContextAlias(alias);
+      if (!resolved) {
+        throw new ValidationError(`alias not found: ${alias}`);
+      }
+      return { namespace: resolved.namespace, contextId: resolved.context_id };
+    }
+
+    if (!hasNamespace || !hasContextId) {
+      throw new ValidationError("namespace and context_id are required");
+    }
+
+    return {
+      namespace: normalizeNamespace(params.namespace),
+      contextId: normalizeContextId(params.context_id)
+    };
+  }
+
+  function applyTagPolicy(
+    tags: string[],
+    namespace: string,
+    contextId: string,
+    warnings: string[]
+  ): string[] {
+    let updated = [...tags];
+    const baseTags = [`namespace:${namespace}`, `context:${contextId}`];
+
+    if (options.policy.autoTag) {
+      const before = new Set(updated);
+      for (const tag of baseTags) {
+        before.add(tag);
+      }
+      updated = Array.from(before);
+      if (updated.length !== tags.length) {
+        warnings.push(`auto-tagged: ${baseTags.join(", ")}`);
+      }
+    }
+
+    const normalized = normalizeTags(updated, 64, 160);
+
+    if (options.policy.requireTags && normalized.length === 0) {
+      throw new ValidationError("tags are required");
+    }
+
+    return normalized;
+  }
 
   async function handleToolCall(name: string, args: unknown) {
     const params = asObject(args);
@@ -233,37 +421,89 @@ export function createMcpHandler(options: McpHandlerOptions) {
         );
         const scope = normalizeOptionalString(params.scope, "scope", 16);
         const owner = normalizeOptionalString(params.owner, "owner", 120);
+        const tags =
+          params.tags === undefined ? null : normalizeTags(params.tags, 64, 160);
         const limit = normalizeLimit(params.limit, 200);
         const contexts = await options.store.listContexts({
           namespace,
           scope,
           owner,
+          tags,
           limit
         });
         return toolResult(contexts);
       }
       case "context_delete": {
-        const namespace = normalizeNamespace(params.namespace);
-        const contextId = normalizeContextId(params.context_id);
+        const { namespace, contextId } = await resolveContextParams(params);
         const deleted = await options.store.deleteContext({
           namespace,
           context_id: contextId
         });
         return toolResult({ deleted });
       }
-      case "entry_upsert": {
+      case "context_alias_set": {
+        const alias = normalizeAlias(params.alias);
         const namespace = normalizeNamespace(params.namespace);
         const contextId = normalizeContextId(params.context_id);
+        const result = await options.store.setContextAlias({
+          alias,
+          namespace,
+          context_id: contextId
+        });
+        return toolResult(result);
+      }
+      case "context_alias_list": {
+        const namespace = normalizeOptionalString(
+          params.namespace,
+          "namespace",
+          64
+        );
+        const contextId = normalizeOptionalString(
+          params.context_id,
+          "context_id",
+          128
+        );
+        const limit = normalizeLimit(params.limit, 200);
+        const aliases = await options.store.listContextAliases({
+          namespace,
+          context_id: contextId,
+          limit
+        });
+        return toolResult(aliases);
+      }
+      case "context_alias_get": {
+        const alias = normalizeAlias(params.alias);
+        const result = await options.store.resolveContextAlias(alias);
+        return toolResult(result ?? { found: false });
+      }
+      case "context_alias_delete": {
+        const alias = normalizeAlias(params.alias);
+        const deleted = await options.store.deleteContextAlias({ alias });
+        return toolResult({ deleted });
+      }
+      case "entry_upsert": {
+        const { namespace, contextId } = await resolveContextParams(params);
         const entryParams = asObject(params.entry);
+        const warnings: string[] = [];
+
+        if (entryParams.raw_text && !options.policy.allowRawText) {
+          throw new ValidationError("raw_text is disabled on this server");
+        }
+
+        const entryType = normalizeEntryType(
+          normalizeRequiredString(entryParams.entry_type, "entry_type", 20)
+        );
 
         const entry = {
-          entry_id:
-            normalizeOptionalString(entryParams.entry_id, "entry_id", 64) ??
-            undefined,
-          entry_type: normalizeEntryType(entryParams.entry_type),
+          entry_id: normalizeOptionalString(entryParams.entry_id, "entry_id", 64) ?? undefined,
+          entry_type: entryType,
           title: normalizeOptionalString(entryParams.title, "title", 200),
-          content: normalizeRequiredString(entryParams.content, "content", 20000),
-          tags: normalizeTags(entryParams.tags),
+          content: normalizeRequiredString(
+            entryParams.content,
+            "content",
+            options.policy.maxContentChars
+          ),
+          tags: normalizeTags(entryParams.tags, 64, 160),
           importance: normalizeImportance(entryParams.importance),
           created_by: normalizeOptionalString(entryParams.created_by, "created_by", 120),
           expires_at: normalizeOptionalString(entryParams.expires_at, "expires_at", 64),
@@ -271,6 +511,23 @@ export function createMcpHandler(options: McpHandlerOptions) {
           embedding: normalizeEmbedding(entryParams.embedding),
           metadata: normalizeMetadata(entryParams.metadata)
         };
+
+        entry.tags = applyTagPolicy(entry.tags, namespace, contextId, warnings);
+
+        if (entry.content.length > options.policy.maxContentChars * 0.8) {
+          warnings.push("content length is near the limit; consider compressing further");
+        }
+        if (entry.raw_text) {
+          warnings.push("raw_text stored; prefer compressed summaries when possible");
+        }
+
+        if (options.policy.forceLatestSummary && entry.entry_type === "summary") {
+          const forcedId = latestEntryId(entry.entry_type);
+          if (entry.entry_id && entry.entry_id !== forcedId) {
+            warnings.push(`entry_id overridden to ${forcedId}`);
+          }
+          entry.entry_id = forcedId;
+        }
 
         if (entry.embedding && !options.vectorEnabled) {
           throw new ValidationError(
@@ -283,11 +540,84 @@ export function createMcpHandler(options: McpHandlerOptions) {
           context_id: contextId,
           entry
         });
-        return toolResult(result);
+        return toolResult(result, warnings);
+      }
+      case "entry_latest_upsert": {
+        const { namespace, contextId } = await resolveContextParams(params);
+        const entryParams = asObject(params.entry);
+        const warnings: string[] = [];
+
+        if (entryParams.raw_text && !options.policy.allowRawText) {
+          throw new ValidationError("raw_text is disabled on this server");
+        }
+
+        const entryType = normalizeEntryType(
+          normalizeRequiredString(entryParams.entry_type, "entry_type", 20)
+        );
+        const forcedId = latestEntryId(entryType);
+        const providedId =
+          normalizeOptionalString(entryParams.entry_id, "entry_id", 64) ?? undefined;
+        if (providedId && providedId !== forcedId) {
+          warnings.push(`entry_id overridden to ${forcedId}`);
+        }
+
+        const entry = {
+          entry_id: forcedId,
+          entry_type: entryType,
+          title: normalizeOptionalString(entryParams.title, "title", 200),
+          content: normalizeRequiredString(
+            entryParams.content,
+            "content",
+            options.policy.maxContentChars
+          ),
+          tags: normalizeTags(entryParams.tags, 64, 160),
+          importance: normalizeImportance(entryParams.importance),
+          created_by: normalizeOptionalString(entryParams.created_by, "created_by", 120),
+          expires_at: normalizeOptionalString(entryParams.expires_at, "expires_at", 64),
+          raw_text: normalizeOptionalString(entryParams.raw_text, "raw_text", 20000),
+          embedding: normalizeEmbedding(entryParams.embedding),
+          metadata: normalizeMetadata(entryParams.metadata)
+        };
+
+        entry.tags = applyTagPolicy(entry.tags, namespace, contextId, warnings);
+
+        if (entry.content.length > options.policy.maxContentChars * 0.8) {
+          warnings.push("content length is near the limit; consider compressing further");
+        }
+        if (entry.raw_text) {
+          warnings.push("raw_text stored; prefer compressed summaries when possible");
+        }
+
+        if (entry.embedding && !options.vectorEnabled) {
+          throw new ValidationError(
+            "embedding provided but pgvector is not enabled on this server"
+          );
+        }
+
+        const result = await options.store.upsertEntry({
+          namespace,
+          context_id: contextId,
+          entry
+        });
+        return toolResult(result, warnings);
+      }
+      case "entry_latest_get": {
+        const { namespace, contextId } = await resolveContextParams(params);
+        const entryType = normalizeEntryType(
+          normalizeRequiredString(params.entry_type, "entry_type", 20)
+        );
+        const includeRaw = Boolean(params.include_raw);
+        const entryId = latestEntryId(entryType);
+        const entry = await options.store.getEntry({
+          namespace,
+          context_id: contextId,
+          entry_id: entryId,
+          include_raw: includeRaw
+        });
+        return toolResult(entry ?? { found: false });
       }
       case "entry_get": {
-        const namespace = normalizeNamespace(params.namespace);
-        const contextId = normalizeContextId(params.context_id);
+        const { namespace, contextId } = await resolveContextParams(params);
         const entryId = normalizeRequiredString(params.entry_id, "entry_id", 64);
         const includeRaw = Boolean(params.include_raw);
         const entry = await options.store.getEntry({
@@ -299,10 +629,9 @@ export function createMcpHandler(options: McpHandlerOptions) {
         return toolResult(entry ?? { found: false });
       }
       case "entry_search": {
-        const namespace = normalizeNamespace(params.namespace);
-        const contextId = normalizeContextId(params.context_id);
+        const { namespace, contextId } = await resolveContextParams(params);
         const query = normalizeOptionalString(params.query, "query", 400);
-        const tags = normalizeTags(params.tags);
+        const tags = normalizeTags(params.tags, 64, 160);
         const types = normalizeEntryTypes(params.types);
         const limit = normalizeLimit(params.limit, 100);
         const includeExpired = Boolean(params.include_expired);
@@ -337,8 +666,7 @@ export function createMcpHandler(options: McpHandlerOptions) {
         return toolResult(entries);
       }
       case "entry_delete": {
-        const namespace = normalizeNamespace(params.namespace);
-        const contextId = normalizeContextId(params.context_id);
+        const { namespace, contextId } = await resolveContextParams(params);
         const entryId = normalizeRequiredString(params.entry_id, "entry_id", 64);
         const deleted = await options.store.deleteEntry({
           namespace,
@@ -537,15 +865,22 @@ function asObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function toolResult(data: unknown) {
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(data, null, 2)
-      }
-    ]
-  };
+function toolResult(data: unknown, warnings?: string[]) {
+  const content = [
+    {
+      type: "text",
+      text: JSON.stringify(data, null, 2)
+    }
+  ];
+
+  if (warnings && warnings.length > 0) {
+    content.push({
+      type: "text",
+      text: `warnings:\n- ${warnings.join("\n- ")}`
+    });
+  }
+
+  return { content };
 }
 
 function errorResponse(

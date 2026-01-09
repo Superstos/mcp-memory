@@ -33,6 +33,10 @@ export function normalizeContextId(value: unknown): string {
   return normalizeIdentifier(value, "context_id", 128);
 }
 
+export function normalizeAlias(value: unknown): string {
+  return normalizeIdentifier(value, "alias", 64);
+}
+
 export function normalizeScope(value: unknown): ContextScope {
   const scope = normalizeOptionalString(value, "scope", 16) ?? "shared";
   if (!SCOPES.has(scope as ContextScope)) {

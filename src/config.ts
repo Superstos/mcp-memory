@@ -12,6 +12,12 @@ export interface Config {
   maxRawChars: number;
   storeRawPlaintext: boolean;
   enablePgvector: boolean;
+  requireTags: boolean;
+  autoTag: boolean;
+  allowRawText: boolean;
+  forceLatestSummary: boolean;
+  latestEntryPrefix: string;
+  cleanupIntervalMs: number;
   logLevel: LogLevel;
   allowOrigin: string;
 }
@@ -26,11 +32,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     rateLimitMax: parseNumber(env.RATE_LIMIT_MAX, 120, "RATE_LIMIT_MAX"),
     rateLimitWindowMs: parseNumber(env.RATE_LIMIT_WINDOW_MS, 60_000, "RATE_LIMIT_WINDOW_MS"),
     maxBodyBytes: parseNumber(env.MAX_BODY_BYTES, 1_048_576, "MAX_BODY_BYTES"),
-    maxContentChars: parseNumber(env.MAX_CONTENT_CHARS, 4_000, "MAX_CONTENT_CHARS"),
+    maxContentChars: parseNumber(env.MAX_CONTENT_CHARS, 2_000, "MAX_CONTENT_CHARS"),
     maxTitleChars: parseNumber(env.MAX_TITLE_CHARS, 200, "MAX_TITLE_CHARS"),
     maxRawChars: parseNumber(env.MAX_RAW_CHARS, 20_000, "MAX_RAW_CHARS"),
     storeRawPlaintext: env.STORE_RAW_PLAINTEXT === "true",
     enablePgvector: env.ENABLE_PGVECTOR === "true",
+    requireTags: parseBoolean(env.REQUIRE_TAGS, true),
+    autoTag: parseBoolean(env.AUTO_TAG, true),
+    allowRawText: parseBoolean(env.ALLOW_RAW_TEXT, false),
+    forceLatestSummary: parseBoolean(env.FORCE_LATEST_SUMMARY, true),
+    latestEntryPrefix: parseString(env.LATEST_ENTRY_PREFIX, "latest-", "LATEST_ENTRY_PREFIX", 32),
+    cleanupIntervalMs: parseIntervalMs(env.CLEANUP_INTERVAL_MS, 0, "CLEANUP_INTERVAL_MS"),
     logLevel: parseLogLevel(env.LOG_LEVEL),
     allowOrigin: env.ALLOW_ORIGIN ?? "*"
   };
@@ -50,6 +62,35 @@ function parseNumber(value: string | undefined, fallback: number, name: string):
     throw new Error(`${name} must be a positive number`);
   }
   return parsed;
+}
+
+function parseIntervalMs(value: string | undefined, fallback: number, name: string): number {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative number`);
+  }
+  return parsed;
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined || value === null || value === "") return fallback;
+  return value.toLowerCase() === "true";
+}
+
+function parseString(
+  value: string | undefined,
+  fallback: string,
+  name: string,
+  maxLength: number
+): string {
+  if (!value) return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  if (trimmed.length > maxLength) {
+    throw new Error(`${name} must be <= ${maxLength} characters`);
+  }
+  return trimmed;
 }
 
 function parseLogLevel(value: string | undefined): LogLevel {

@@ -11,6 +11,14 @@ export interface ContextRecord {
   updated_at: string;
 }
 
+export interface ContextAliasRecord {
+  alias: string;
+  namespace: string;
+  context_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface EntryRecord {
   id: string;
   context_pk: string;

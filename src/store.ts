@@ -2,7 +2,13 @@ import crypto from "node:crypto";
 import pg from "pg";
 import { compressText, decompressText } from "./compression.js";
 import { buildSearchQuery } from "./query.js";
-import { EntryInput, EntryRecord, SearchOptions, ContextRecord } from "./types.js";
+import {
+  EntryInput,
+  EntryRecord,
+  SearchOptions,
+  ContextRecord,
+  ContextAliasRecord
+} from "./types.js";
 
 export interface StoreOptions {
   maxContentChars: number;
@@ -26,9 +32,22 @@ export interface MemoryStore {
     namespace?: string | null;
     scope?: string | null;
     owner?: string | null;
+    tags?: string[] | null;
     limit?: number | null;
   }): Promise<ContextRecord[]>;
   deleteContext(input: { namespace: string; context_id: string }): Promise<boolean>;
+  setContextAlias(input: {
+    alias: string;
+    namespace: string;
+    context_id: string;
+  }): Promise<ContextAliasRecord>;
+  listContextAliases(input: {
+    namespace?: string | null;
+    context_id?: string | null;
+    limit?: number | null;
+  }): Promise<ContextAliasRecord[]>;
+  deleteContextAlias(input: { alias: string }): Promise<boolean>;
+  resolveContextAlias(alias: string): Promise<{ namespace: string; context_id: string } | null>;
   upsertEntry(input: {
     namespace: string;
     context_id: string;
@@ -46,6 +65,7 @@ export interface MemoryStore {
     context_id: string;
     entry_id: string;
   }): Promise<boolean>;
+  cleanupExpiredEntries(): Promise<number>;
 }
 
 export function createStore(pool: pg.Pool, storeOptions: StoreOptions): MemoryStore {
@@ -108,6 +128,11 @@ export function createStore(pool: pg.Pool, storeOptions: StoreOptions): MemorySt
         where.push(`owner = $${values.length}`);
       }
 
+      if (input.tags && input.tags.length > 0) {
+        values.push(input.tags);
+        where.push(`tags && $${values.length}`);
+      }
+
       const limit = Math.min(input.limit ?? 50, 200);
       values.push(limit);
 
@@ -130,6 +155,70 @@ export function createStore(pool: pg.Pool, storeOptions: StoreOptions): MemorySt
         [input.namespace, input.context_id]
       );
       return (result.rowCount ?? 0) > 0;
+    },
+
+    async setContextAlias(input) {
+      const result = await pool.query<ContextAliasRecord>(
+        `
+        INSERT INTO context_aliases (alias, namespace, context_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (alias) DO UPDATE SET
+          namespace = EXCLUDED.namespace,
+          context_id = EXCLUDED.context_id
+        RETURNING *
+        `,
+        [input.alias, input.namespace, input.context_id]
+      );
+      return result.rows[0];
+    },
+
+    async listContextAliases(input) {
+      const values: unknown[] = [];
+      const where: string[] = [];
+
+      if (input.namespace) {
+        values.push(input.namespace);
+        where.push(`namespace = $${values.length}`);
+      }
+
+      if (input.context_id) {
+        values.push(input.context_id);
+        where.push(`context_id = $${values.length}`);
+      }
+
+      const limit = Math.min(input.limit ?? 50, 200);
+      values.push(limit);
+
+      const result = await pool.query<ContextAliasRecord>(
+        `
+        SELECT * FROM context_aliases
+        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+        ORDER BY updated_at DESC
+        LIMIT $${values.length}
+        `,
+        values
+      );
+
+      return result.rows;
+    },
+
+    async deleteContextAlias(input) {
+      const result = await pool.query(
+        "DELETE FROM context_aliases WHERE alias = $1",
+        [input.alias]
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
+    async resolveContextAlias(alias) {
+      const result = await pool.query<{
+        namespace: string;
+        context_id: string;
+      }>("SELECT namespace, context_id FROM context_aliases WHERE alias = $1", [
+        alias
+      ]);
+      if ((result.rowCount ?? 0) === 0) return null;
+      return result.rows[0];
     },
 
     async upsertEntry(input) {
@@ -250,6 +339,13 @@ export function createStore(pool: pg.Pool, storeOptions: StoreOptions): MemorySt
         [input.entry_id, contextPk]
       );
       return (result.rowCount ?? 0) > 0;
+    },
+
+    async cleanupExpiredEntries() {
+      const result = await pool.query(
+        "DELETE FROM entries WHERE expires_at IS NOT NULL AND expires_at <= now()"
+      );
+      return result.rowCount ?? 0;
     }
   };
 }
